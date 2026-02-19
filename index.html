@@ -79,7 +79,7 @@
 
     <script>
         let clearVisualsTimeout = null;
-        let audioCtx, analyser;
+        let audioCtx, analyser, biquadFilter;
         
         const notes = [
             { name: 'E', freq: 82.41, id: 6, w: 5, label: '6ª' }, 
@@ -99,33 +99,53 @@
                 </div>`;
         });
 
-        // Inicia automaticamente ao carregar a página
         window.addEventListener('load', initMic);
 
         async function initMic() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
+                    audio: { 
+                        echoCancellation: false, 
+                        noiseSuppression: true, 
+                        autoGainControl: false 
+                    } 
                 });
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // --- FILTRO PARA IGNORAR VOZ ---
+                // Criamos um filtro que foca apenas na região de frequência do violão
+                biquadFilter = audioCtx.createBiquadFilter();
+                biquadFilter.type = "bandpass";
+                biquadFilter.frequency.value = 185; // Centro médio entre as cordas
+                biquadFilter.Q.value = 0.8; // Largura de banda para pegar do E grave ao e agudo
+
                 analyser = audioCtx.createAnalyser();
                 analyser.fftSize = 4096;
-                audioCtx.createMediaStreamSource(stream).connect(analyser);
+
+                const source = audioCtx.createMediaStreamSource(stream);
+                source.connect(biquadFilter); // Passa pelo filtro primeiro
+                biquadFilter.connect(analyser); // Depois vai para análise
                 
                 document.getElementById('instruction-display').innerText = "WNET TUNER";
                 loop();
             } catch (e) { 
-                document.getElementById('instruction-display').innerText = "ERRO DE ÁUDIO";
-                console.error(e);
+                document.getElementById('instruction-display').innerText = "ACESSO NEGADO";
             }
         }
 
         function loop() {
             const buffer = new Float32Array(analyser.fftSize);
             analyser.getFloatTimeDomainData(buffer);
+            
+            // Aplica Hanning Window
+            for (let i = 0; i < buffer.length; i++) {
+                buffer[i] *= 0.5 * (1 - Math.cos(2 * Math.PI * i / (buffer.length - 1)));
+            }
+
             const freq = autoCorrelate(buffer, audioCtx.sampleRate);
             
-            if (freq > 75 && freq < 350) {
+            // Faixa restrita ao violão padrão
+            if (freq > 78 && freq < 340) {
                 if (clearVisualsTimeout) {
                     clearTimeout(clearVisualsTimeout);
                     clearVisualsTimeout = null;
@@ -136,7 +156,7 @@
                     clearVisualsTimeout = setTimeout(() => {
                         render(-1);
                         clearVisualsTimeout = null;
-                    }, 600); 
+                    }, 1500); 
                 }
             }
             requestAnimationFrame(loop);
@@ -151,7 +171,7 @@
                 document.querySelectorAll('.string-wire').forEach(el => el.classList.remove('wire-vibrate'));
                 display.innerText = "--";
                 display.style.color = "rgba(255,255,255,0.05)";
-                ins.innerText = "WNET TUNER";
+                ins.innerText = "AGUARDANDO SOM...";
                 ins.className = "";
                 pointer.style.opacity = "0.5";
                 pointer.style.transform = `rotate(0deg)`;
@@ -164,13 +184,14 @@
             display.innerText = closest.name;
             display.style.color = "rgba(255,255,255,0.8)";
             pointer.style.opacity = "1";
-            pointer.style.transform = `rotate(${Math.max(-50, Math.min(50, diff * 12))}deg)`;
+            pointer.style.transform = `rotate(${Math.max(-50, Math.min(50, diff * 15))}deg)`;
 
             document.querySelectorAll('.string-wire').forEach(el => el.classList.remove('wire-vibrate'));
-            document.getElementById(`str-${closest.id}`).classList.add('wire-vibrate');
+            const strEl = document.getElementById(`str-${closest.id}`);
+            if(strEl) strEl.classList.add('wire-vibrate');
 
             ins.className = "";
-            if (Math.abs(diff) < 0.6) {
+            if (Math.abs(diff) < 0.7) {
                 ins.innerText = "AFINADO";
                 ins.classList.add('text-perfect');
                 pointer.style.background = "var(--neon-green)";
@@ -189,7 +210,9 @@
             let rms = 0;
             for (let i=0; i<buf.length; i++) rms += buf[i]*buf[i];
             rms = Math.sqrt(rms/buf.length);
-            if (rms < 0.04) return -1; 
+            
+            // Limiar de energia aumentado para ignorar fala/ruído ambiente
+            if (rms < 0.06) return -1; 
             
             let c = new Float32Array(buf.length);
             for (let i=0; i<buf.length; i++)
@@ -201,7 +224,8 @@
             for (let i=d; i<buf.length; i++) {
                 if (c[i]>maxval) { maxval=c[i]; maxpos=i; }
             }
-            if ((maxval / c[0]) < 0.8) return -1; 
+            // Critério de correlação rigoroso (0.9) para ignorar harmônicos de voz
+            if ((maxval / c[0]) < 0.9) return -1; 
             return sr/maxpos;
         }
     </script>
