@@ -255,6 +255,199 @@
                 ins.innerText = "AFROUXAR ▼";
                 ins.classList.add('text-afrouxar'); 
                 pointer.style.background = "var(--neon-red)";
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WNET TUNER</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;500;700&display=swap');
+
+        :root {
+            --neon-cyan: #00f2ff;
+            --neon-green: #00ff88;
+            --neon-red: #ff0055;
+            --neon-yellow: #ffea00;
+            --bg-dark: #050508;
+        }
+
+        body {
+            margin: 0; padding: 0;
+            font-family: 'Rajdhani', sans-serif;
+            background-color: var(--bg-dark);
+            background-image: radial-gradient(circle at 50% 50%, #101a25 0%, #050508 100%);
+            color: white;
+            height: 100vh; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        /* --- TUNER --- */
+        #tuner-interface {
+            display: flex; /* Alterado de none para flex */
+            width: 100%; height: 100%;
+            flex-direction: column; align-items: center;
+            padding: 20px; box-sizing: border-box;
+        }
+
+        .mainframe { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; max-width: 500px; }
+        
+        #instruction-display { font-family: 'Orbitron'; font-size: 1.1rem; text-align: center; height: 35px; letter-spacing: 2px; font-weight: 700; transition: color 0.3s; }
+        
+        #note-display { font-family: 'Orbitron'; font-size: 8rem; font-weight: 900; line-height: 1; color: rgba(255,255,255,0.05); transition: color 0.3s; }
+        
+        .gauge-mobile { width: 100%; height: 80px; position: relative; display: flex; justify-content: center; }
+        
+        #pointer { width: 3px; height: 100px; background: var(--neon-cyan); transform-origin: bottom center; position: absolute; bottom: 0; transition: 0.15s cubic-bezier(0, 0, 0.2, 1); opacity: 0.5; }
+
+        .strings-container {
+            display: flex; justify-content: space-around; align-items: flex-end;
+            height: 200px; background: rgba(255,255,255,0.01);
+            border-radius: 20px; padding: 15px; margin-bottom: 40px; border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .string-unit { height: 100%; display: flex; flex-direction: column; align-items: center; width: 45px; }
+        .string-wire { flex: 1; background: #222; border-radius: 2px; width: 2px; transition: 0.3s; }
+        .wire-vibrate { background: var(--neon-cyan) !important; box-shadow: 0 0 15px var(--neon-cyan); animation: vibrate 0.1s infinite linear; }
+        
+        @keyframes vibrate { 0% { transform: scaleX(1); } 50% { transform: scaleX(2.5); } 100% { transform: scaleX(1); } }
+
+        .string-name { font-family: 'Orbitron'; font-size: 0.7rem; color: #444; margin-top: 10px; text-align: center; }
+
+        .text-perfect { color: var(--neon-green) !important; text-shadow: 0 0 15px var(--neon-green); }
+        .text-apertar { color: var(--neon-yellow) !important; text-shadow: 0 0 10px var(--neon-yellow); }
+        .text-afrouxar { color: var(--neon-red) !important; text-shadow: 0 0 10px var(--neon-red); }
+
+        /* Botão para iniciar o áudio (exigência dos navegadores modernos) */
+        #start-btn {
+            position: fixed; z-index: 100;
+            background: var(--neon-cyan); color: black;
+            border: none; padding: 15px 30px; font-family: 'Orbitron';
+            font-weight: bold; border-radius: 50px; cursor: pointer;
+            box-shadow: 0 0 20px var(--neon-cyan);
+        }
+    </style>
+</head>
+<body>
+
+    <button id="start-btn" onclick="initMic()">ATIVAR AFINADOR</button>
+
+    <div id="tuner-interface">
+        <div class="mainframe">
+            <div id="instruction-display">AGUARDANDO...</div>
+            <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                <div id="note-display">--</div>
+                <div class="gauge-mobile">
+                    <div id="pointer"></div>
+                </div>
+            </div>
+            <div class="strings-container" id="strings-box"></div>
+        </div>
+    </div>
+
+    <script>
+        let clearVisualsTimeout = null;
+        let audioCtx, analyser;
+        
+        const notes = [
+            { name: 'E', freq: 82.41, id: 6, w: 5, label: '6ª' }, 
+            { name: 'A', freq: 110.00, id: 5, w: 4, label: '5ª' },
+            { name: 'D', freq: 146.83, id: 4, w: 3.5, label: '4ª' }, 
+            { name: 'G', freq: 196.00, id: 3, w: 2.5, label: '3ª' },
+            { name: 'B', freq: 246.94, id: 2, w: 2, label: '2ª' }, 
+            { name: 'e', freq: 329.63, id: 1, w: 1.5, label: '1ª' }
+        ];
+
+        const stringsBox = document.getElementById('strings-box');
+        notes.forEach(n => {
+            stringsBox.innerHTML += `
+                <div class="string-unit">
+                    <div class="string-wire" id="str-${n.id}" style="width: ${n.w}px;"></div>
+                    <span class="string-name" id="lbl-${n.id}">${n.name}<br>${n.label}</span>
+                </div>`;
+        });
+
+        async function initMic() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
+                });
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 4096;
+                audioCtx.createMediaStreamSource(stream).connect(analyser);
+                
+                // Remove o botão e inicia o loop
+                document.getElementById('start-btn').style.display = 'none';
+                document.getElementById('instruction-display').innerText = "WNET TUNER";
+                loop();
+            } catch (e) { 
+                alert("Permissão de áudio negada ou erro de HTTPS."); 
+            }
+        }
+
+        function loop() {
+            const buffer = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(buffer);
+            const freq = autoCorrelate(buffer, audioCtx.sampleRate);
+            
+            if (freq > 75 && freq < 350) {
+                if (clearVisualsTimeout) {
+                    clearTimeout(clearVisualsTimeout);
+                    clearVisualsTimeout = null;
+                }
+                render(freq);
+            } else {
+                if (!clearVisualsTimeout) {
+                    clearVisualsTimeout = setTimeout(() => {
+                        render(-1);
+                        clearVisualsTimeout = null;
+                    }, 600); 
+                }
+            }
+            requestAnimationFrame(loop);
+        }
+
+        function render(freq) {
+            const ins = document.getElementById('instruction-display');
+            const display = document.getElementById('note-display');
+            const pointer = document.getElementById('pointer');
+
+            if (freq === -1) {
+                document.querySelectorAll('.string-wire').forEach(el => el.classList.remove('wire-vibrate'));
+                display.innerText = "--";
+                display.style.color = "rgba(255,255,255,0.05)";
+                ins.innerText = "WNET TUNER";
+                ins.className = "";
+                pointer.style.opacity = "0.5";
+                pointer.style.transform = `rotate(0deg)`;
+                return;
+            }
+
+            let closest = notes.reduce((prev, curr) => Math.abs(curr.freq - freq) < Math.abs(prev.freq - freq) ? curr : prev);
+            const diff = freq - closest.freq;
+
+            display.innerText = closest.name;
+            display.style.color = "rgba(255,255,255,0.8)";
+            pointer.style.opacity = "1";
+            pointer.style.transform = `rotate(${Math.max(-50, Math.min(50, diff * 12))}deg)`;
+
+            document.querySelectorAll('.string-wire').forEach(el => el.classList.remove('wire-vibrate'));
+            document.getElementById(`str-${closest.id}`).classList.add('wire-vibrate');
+
+            ins.className = "";
+            if (Math.abs(diff) < 0.6) {
+                ins.innerText = "AFINADO";
+                ins.classList.add('text-perfect');
+                pointer.style.background = "var(--neon-green)";
+            } else if (diff < 0) {
+                ins.innerText = "APERTAR ▲";
+                ins.classList.add('text-apertar'); 
+                pointer.style.background = "var(--neon-yellow)";
+            } else {
+                ins.innerText = "AFROUXAR ▼";
+                ins.classList.add('text-afrouxar'); 
+                pointer.style.background = "var(--neon-red)";
             }
         }
 
@@ -280,3 +473,4 @@
     </script>
 </body>
 </html>
+
